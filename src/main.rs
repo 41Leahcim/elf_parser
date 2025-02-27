@@ -183,7 +183,7 @@ pub struct Elf {
     /// The size of a word/pointer
     word_size: WordSize,
 
-    /// The endiannes of the system
+    /// The endianness of the system
     endian: Endian,
 
     /// Version of the header
@@ -237,23 +237,36 @@ impl Elf {
     /// Returns an error if the reader didn't contain the expected number of bytes, or an invalid
     /// value was found.
     pub fn from_readable<R: Read>(reader: &mut R) -> Result<Self, ElfError> {
+        // Check the first 4 bytes
         let start = read_bytes::<4>(reader)?;
         if start[0] != 0x7F || &start[1..] != b"ELF" {
             return Err(ElfError::InvalidStart(start));
         }
+
+        // Parse the word/pointer size
         let word_size = match read_byte(reader)? {
             1 => WordSize::B32,
             2 => WordSize::B64,
             size => return Err(ElfError::InvalidWordSize(size)),
         };
+
+        // Parse the endianness
         let endian = match read_byte(reader)? {
             1 => Endian::Little,
             2 => Endian::Big,
             endian => return Err(ElfError::InvalidEndian(endian)),
         };
+
+        // Read the header version
         let header_version = read_byte(reader)?;
+
+        // Read the os abi version
         let os_abi = read_byte(reader)?;
+
+        // Skip the padding
         let _padding = read_bytes::<8>(reader)?;
+
+        // Parse the elf type
         let elf_type = match read_u16(reader)? {
             1 => ElfType::Relocatable,
             2 => ElfType::Executable,
@@ -261,6 +274,8 @@ impl Elf {
             4 => ElfType::Core,
             elf_type => return Err(ElfError::InvalidElfType(elf_type)),
         };
+
+        // Parse the architecture
         let architecture = match read_u16(reader)? {
             0 => Architecture::NoSpecific,
             2 => Architecture::Sparc,
@@ -275,6 +290,8 @@ impl Elf {
             0xF3 => Architecture::RiscV,
             _ => Architecture::Unknown,
         };
+
+        // Parse the other sections and return the result
         Ok(Self {
             word_size,
             endian,
@@ -282,6 +299,7 @@ impl Elf {
             os_abi,
             elf_type,
             architecture,
+
             elf_version: read_u32(reader)?,
             program_entry_offset: Offset::from_readable(reader, word_size)?,
             program_header_table_offset: Offset::from_readable(reader, word_size)?,
