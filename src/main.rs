@@ -1,41 +1,58 @@
-#![warn(clippy::pedantic)]
-#![allow(clippy::must_use_candidate)]
+#![warn(clippy::pedantic, clippy::nursery, clippy::restriction)]
+#![allow(
+    clippy::must_use_candidate,
+    clippy::allow_attributes_without_reason,
+    clippy::blanket_clippy_restriction_lints,
+    clippy::implicit_return,
+    clippy::pattern_type_mismatch,
+    clippy::min_ident_chars,
+    clippy::arbitrary_source_item_ordering,
+    clippy::question_mark_used,
+    clippy::single_call_fn,
+    clippy::use_debug,
+    clippy::print_stdout
+)]
 
 //! Source: <https://wiki.osdev.org/ELF>
 
+use core::fmt::{self, Display, Write as _};
+
 use std::{
     env::args,
-    fmt::{Display, Write},
     fs::File,
     io::{self, BufReader, Read},
 };
 
+/// The size of a word/pointer
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(clippy::exhaustive_enums)]
 pub enum WordSize {
     B32,
     B64,
 }
 
 impl Display for WordSize {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "{}-bit",
             match self {
-                WordSize::B32 => 32,
-                WordSize::B64 => 64,
+                Self::B32 => 32,
+                Self::B64 => 64,
             }
         )
     }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(clippy::exhaustive_enums)]
 pub enum Endian {
     Little,
     Big,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ElfType {
     Relocatable,
     Executable,
@@ -44,6 +61,7 @@ pub enum ElfType {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Architecture {
     NoSpecific = 0,
     Sparc = 2,
@@ -60,6 +78,7 @@ pub enum Architecture {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[expect(clippy::exhaustive_enums)]
 pub enum Offset {
     B32(u32),
     B64(u64),
@@ -68,7 +87,7 @@ pub enum Offset {
 impl Offset {
     /// # Errors
     /// Returns an error if not enough bytes could be read from the reader.
-    pub fn from_readable(reader: &mut impl Read, word_size: WordSize) -> io::Result<Self> {
+    pub fn from_readable<R: Read>(reader: &mut R, word_size: WordSize) -> io::Result<Self> {
         if word_size == WordSize::B32 {
             read_u32(reader).map(Offset::B32)
         } else {
@@ -95,7 +114,7 @@ impl Flags {
 }
 
 impl Display for Flags {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.readable() {
             f.write_char('r')?;
         } else {
@@ -114,28 +133,35 @@ impl Display for Flags {
     }
 }
 
+/// Reads the requested number of bytes, returns an error when reading fails
 fn read_bytes<const SIZE: usize>(reader: &mut impl Read) -> io::Result<[u8; SIZE]> {
     let mut result = [0; SIZE];
     reader.read_exact(&mut result)?;
     Ok(result)
 }
 
+/// Reads a single byte
 fn read_byte(reader: &mut impl Read) -> io::Result<u8> {
     read_bytes::<1>(reader).map(|result| result[0])
 }
 
+/// Reads 2 bytes into a u16
 fn read_u16(reader: &mut impl Read) -> io::Result<u16> {
     read_bytes::<2>(reader).map(u16::from_ne_bytes)
 }
 
+/// Reads 4 bytes into a u32
 fn read_u32(reader: &mut impl Read) -> io::Result<u32> {
     read_bytes::<4>(reader).map(u32::from_ne_bytes)
 }
 
+/// Reads 8 bytes into a u64
 fn read_u64(reader: &mut impl Read) -> io::Result<u64> {
     read_bytes::<8>(reader).map(u64::from_ne_bytes)
 }
 
+/// Error while parsing an ELF file
+#[non_exhaustive]
 #[derive(Debug)]
 pub enum ElfError {
     Io(io::Error),
@@ -151,24 +177,58 @@ impl From<io::Error> for ElfError {
     }
 }
 
+/// The ELF file header
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Elf {
+    /// The size of a word/pointer
     word_size: WordSize,
+
+    /// The endiannes of the system
     endian: Endian,
+
+    /// Version of the header
     header_version: u8,
+
+    /// OS ABI - 0 usually means System V
     os_abi: u8,
+
+    /// Type of the elf file
     elf_type: ElfType,
+
+    /// Architecture of the platform
     architecture: Architecture,
+
+    /// ELF version, this application is based on version 1
     elf_version: u32,
+
+    /// File offset of the program entry
     program_entry_offset: Offset,
+
+    /// File offset of the program header table
     program_header_table_offset: Offset,
+
+    /// File offset of the section header table
     section_header_table_offset: Offset,
+
+    /// Architecture dependent flags
     flags: Flags,
+
+    /// Elf header size
     elf_header_size: u16,
+
+    /// Size of an entry in the program header table
     program_header_table_entry_size: u16,
+
+    /// Number of entries in the program header table
     program_header_table_entry_count: u16,
+
+    /// Size of an entry in the section header table
     section_header_table_entry_size: u16,
+
+    /// Number of entries in the section header table
     section_header_table_entry_count: u16,
+
+    /// Index of the string table in the section header table
     section_header_string_table_index: u16,
 }
 
@@ -176,7 +236,7 @@ impl Elf {
     /// # Errors
     /// Returns an error if the reader didn't contain the expected number of bytes, or an invalid
     /// value was found.
-    pub fn from_readable(reader: &mut impl Read) -> Result<Self, ElfError> {
+    pub fn from_readable<R: Read>(reader: &mut R) -> Result<Self, ElfError> {
         let start = read_bytes::<4>(reader)?;
         if start[0] != 0x7F || &start[1..] != b"ELF" {
             return Err(ElfError::InvalidStart(start));
@@ -238,7 +298,7 @@ impl Elf {
 }
 
 impl Display for Elf {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
             "{:?} ELF version {:?} file for {:?} endian {} {:?}",
@@ -247,6 +307,7 @@ impl Display for Elf {
     }
 }
 
+#[expect(clippy::unwrap_used)]
 fn main() {
     println!(
         "{}",
