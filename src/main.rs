@@ -1,4 +1,8 @@
-/// Source: https://wiki.osdev.org/ELF
+#![warn(clippy::pedantic)]
+#![allow(clippy::must_use_candidate)]
+
+//! Source: <https://wiki.osdev.org/ELF>
+
 use std::{
     env::args,
     fmt::{Display, Write},
@@ -62,6 +66,8 @@ pub enum Offset {
 }
 
 impl Offset {
+    /// # Errors
+    /// Returns an error if not enough bytes could be read from the reader.
     pub fn from_readable(reader: &mut impl Read, word_size: WordSize) -> io::Result<Self> {
         if word_size == WordSize::B32 {
             read_u32(reader).map(Offset::B32)
@@ -108,27 +114,6 @@ impl Display for Flags {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Elf {
-    word_size: WordSize,
-    endian: Endian,
-    header_version: u8,
-    os_abi: u8,
-    elf_type: ElfType,
-    architecture: Architecture,
-    elf_version: u32,
-    program_entry_offset: Offset,
-    program_header_table_offset: Offset,
-    section_header_table_offset: Offset,
-    flags: Flags,
-    elf_header_size: u16,
-    program_header_table_entry_size: u16,
-    program_header_table_entry_count: u16,
-    section_header_table_entry_size: u16,
-    section_header_table_entry_count: u16,
-    section_header_string_table_index: u16,
-}
-
 fn read_bytes<const SIZE: usize>(reader: &mut impl Read) -> io::Result<[u8; SIZE]> {
     let mut result = [0; SIZE];
     reader.read_exact(&mut result)?;
@@ -151,19 +136,60 @@ fn read_u64(reader: &mut impl Read) -> io::Result<u64> {
     read_bytes::<8>(reader).map(u64::from_ne_bytes)
 }
 
+#[derive(Debug)]
+pub enum ElfError {
+    Io(io::Error),
+    InvalidStart([u8; 4]),
+    InvalidWordSize(u8),
+    InvalidEndian(u8),
+    InvalidElfType(u16),
+}
+
+impl From<io::Error> for ElfError {
+    fn from(value: io::Error) -> Self {
+        Self::Io(value)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Elf {
+    word_size: WordSize,
+    endian: Endian,
+    header_version: u8,
+    os_abi: u8,
+    elf_type: ElfType,
+    architecture: Architecture,
+    elf_version: u32,
+    program_entry_offset: Offset,
+    program_header_table_offset: Offset,
+    section_header_table_offset: Offset,
+    flags: Flags,
+    elf_header_size: u16,
+    program_header_table_entry_size: u16,
+    program_header_table_entry_count: u16,
+    section_header_table_entry_size: u16,
+    section_header_table_entry_count: u16,
+    section_header_string_table_index: u16,
+}
+
 impl Elf {
-    pub fn from_readable(reader: &mut impl Read) -> io::Result<Self> {
-        assert_eq!(read_byte(reader)?, 0x7F);
-        assert_eq!(read_bytes::<3>(reader)?.as_slice(), b"ELF");
+    /// # Errors
+    /// Returns an error if the reader didn't contain the expected number of bytes, or an invalid
+    /// value was found.
+    pub fn from_readable(reader: &mut impl Read) -> Result<Self, ElfError> {
+        let start = read_bytes::<4>(reader)?;
+        if start[0] != 0x7F || &start[1..] != b"ELF" {
+            return Err(ElfError::InvalidStart(start));
+        }
         let word_size = match read_byte(reader)? {
             1 => WordSize::B32,
             2 => WordSize::B64,
-            size => panic!("Invalid word size: {size}"),
+            size => return Err(ElfError::InvalidWordSize(size)),
         };
         let endian = match read_byte(reader)? {
             1 => Endian::Little,
             2 => Endian::Big,
-            endian => panic!("Invalid endian byte: {endian}"),
+            endian => return Err(ElfError::InvalidEndian(endian)),
         };
         let header_version = read_byte(reader)?;
         let os_abi = read_byte(reader)?;
@@ -173,7 +199,7 @@ impl Elf {
             2 => ElfType::Executable,
             3 => ElfType::Shared,
             4 => ElfType::Core,
-            elf_type => panic!("Invalid elf type value: {elf_type}"),
+            elf_type => return Err(ElfError::InvalidElfType(elf_type)),
         };
         let architecture = match read_u16(reader)? {
             0 => Architecture::NoSpecific,
