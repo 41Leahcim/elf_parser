@@ -21,7 +21,7 @@ use core::{
     iter,
 };
 
-use std::io::{self, Read};
+use std::io::{self, Read, Seek, SeekFrom};
 
 /// Reads the requested number of bytes, returns an error when reading fails
 fn read_bytes<const SIZE: usize>(reader: &mut impl Read) -> io::Result<[u8; SIZE]> {
@@ -407,7 +407,7 @@ impl Elf {
     /// Returns an error if the reader didn't contain the expected number of bytes, or an invalid
     /// value was found.
     #[inline]
-    pub fn from_readable<R: Read>(reader: &mut R) -> Result<Self, ElfError> {
+    pub fn from_readable<R: Read + Seek>(reader: &mut R) -> Result<Self, ElfError> {
         // Check the first 4 bytes
         let start = read_bytes::<4>(reader)?;
         if start[0] != 0x7F || &start[1..] != b"ELF" {
@@ -475,13 +475,10 @@ impl Elf {
             section_header_table_entry_count,
             section_header_string_table_index,
             program_headers: {
-                reader
-                    .bytes()
-                    .take(match program_entry_offset {
-                        Offset::B32(offset) => offset.saturating_sub(52) as usize,
-                        Offset::B64(offset) => offset.saturating_sub(52) as usize,
-                    })
-                    .for_each(|_| {});
+                reader.seek(SeekFrom::Start(match program_entry_offset {
+                    Offset::B32(offset) => u64::from(offset),
+                    Offset::B64(offset) => offset,
+                }))?;
                 iter::repeat_with(|| ProgramHeader::from_readable(reader, word_size))
                     .take(program_header_table_entry_count.into())
                     .collect::<io::Result<Vec<_>>>()?
