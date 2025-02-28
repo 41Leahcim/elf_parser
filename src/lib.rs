@@ -435,7 +435,7 @@ impl Elf {
         let os_abi = read_byte(reader)?;
 
         // Skip the padding
-        let _: [u8; 8] = read_bytes(reader)?;
+        reader.seek_relative(8)?;
 
         // Parse the elf type
         let elf_type = ElfType::from_readable(reader)?;
